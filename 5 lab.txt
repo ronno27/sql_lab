@@ -1,0 +1,357 @@
+--45. Выбрать названия групп и названия альбомов, которые 
+--совпадают с названиями городов или стран.  
+ANALYZE 
+
+EXPLAIN ANALYZE 
+
+-- без использования оконных функций 
+EXPLAIN ANALYZE SELECT mg.name_group, ag.name_album
+FROM music_group mg
+JOIN album_group ag ON mg.id_group = ag.id_group
+WHERE TRIM(mg.name_group) IN (
+    SELECT TRIM(name_city) FROM city
+    UNION
+    SELECT TRIM(name_country) FROM country)
+	OR TRIM(ag.name_album) IN (
+    	SELECT TRIM(name_city) FROM city
+    	UNION
+    	SELECT TRIM(name_country) FROM country);
+
+-- без использования оконных функций, но с NION ALL 
+EXPLAIN ANALYZE SELECT mg.name_group, ag.name_album
+FROM music_group mg
+JOIN album_group ag ON mg.id_group = ag.id_group
+WHERE TRIM(mg.name_group) IN (
+    SELECT TRIM(name_city) FROM city
+    UNION ALL
+    SELECT TRIM(name_country) FROM country)
+	OR TRIM(ag.name_album) IN (
+    	SELECT TRIM(name_city) FROM city
+    	UNION ALL
+    	SELECT TRIM(name_country) FROM country);    
+    
+--с оконными функциями 
+EXPLAIN ANALYZE WITH GroupAlbum AS (
+    SELECT mg.name_group, ag.name_album,
+           ROW_NUMBER() OVER (PARTITION BY mg.id_group ORDER BY ag.year_release DESC) AS rn
+    FROM music_group mg
+    JOIN album_group ag ON mg.id_group = ag.id_group
+    WHERE mg.name_group IN (
+        SELECT name_city FROM city
+        UNION
+        SELECT name_country FROM country
+    )
+    OR TRIM(ag.name_album) IN (
+    	SELECT TRIM(name_city) FROM city
+    	UNION
+    	SELECT TRIM(name_country) FROM country)
+)
+SELECT name_group, name_album
+FROM GroupAlbum
+WHERE rn = 1;
+
+-- CTE
+EXPLAIN ANALYZE WITH CityCountryNames AS (
+    SELECT name_city AS name FROM city
+    UNION
+    SELECT name_country AS name FROM country
+)
+SELECT mg.name_group, ag.name_album
+FROM music_group mg
+JOIN album_group ag ON mg.id_group = ag.id_group
+WHERE mg.name_group IN (SELECT name FROM CityCountryNames)
+   OR ag.name_album IN (SELECT name FROM CityCountryNames);
+
+
+--46. Выбрать все данные о самом длительном туре. 
+ANALYZE 
+
+  
+-- простой вариант 
+EXPLAIN ANALYZE SELECT *
+FROM group_tour
+WHERE end_date - start_date = (
+    SELECT MAX(end_date - start_date)
+    FROM group_tour
+);
+ 
+  
+-- СТЕ 
+EXPLAIN ANALYZE WITH TourDurations AS (
+    SELECT id_group_tour, end_date - start_date AS duration
+    FROM group_tour
+)
+SELECT gt.*
+FROM group_tour gt
+JOIN TourDurations td ON gt.id_group_tour = td.id_group_tour
+WHERE td.duration = (
+    SELECT MAX(duration)
+    FROM TourDurations
+);
+
+  
+ -- оконные функции
+EXPLAIN ANALYZE WITH TourDurations AS (
+    SELECT id_group_tour, end_date - start_date AS duration
+    FROM group_tour
+)
+SELECT *
+FROM (
+    SELECT *, RANK() OVER (ORDER BY duration DESC) AS rnk
+    FROM TourDurations
+) sub
+WHERE rnk = 1;
+
+--47. Выбрать название, сроки и страну тура с наибольшим 
+--количеством концертов.   
+ANALYZE 
+
+-- с оконными 
+EXPLAIN ANALYZE WITH concert_counts AS (
+    SELECT gt.name_tour, gt.start_date, gt.end_date, co.name_country,
+           ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC) AS rn
+    FROM group_tour gt
+    JOIN concert_group cg ON gt.id_group_tour = cg.id_group_tour
+    JOIN city_the_tour ct ON cg.id_city_the_tour = ct.id_city_the_tour
+    JOIN city c ON ct.id_city = c.id_city
+    JOIN country co ON c.id_country = co.id_country
+    GROUP BY gt.name_tour, gt.start_date, gt.end_date, co.name_country
+)
+SELECT name_tour, start_date, end_date, name_country
+FROM concert_counts
+WHERE rn = 1;
+
+
+--48. Выбрать название группы, которая посетила все страны. 
+ANALYZE 
+
+--Используя подзапрос
+EXPLAIN ANALYZE SELECT mg.name_group
+FROM music_group mg
+WHERE NOT EXISTS (
+    SELECT c.id_country
+    FROM country c
+    WHERE NOT EXISTS (
+        SELECT *
+        FROM concert_group cg
+        JOIN city_the_tour ct ON cg.id_city_the_tour = ct.id_city_the_tour
+        JOIN city cc ON ct.id_city = cc.id_city
+        WHERE cg.id_group = mg.id_group
+        AND cc.id_country = c.id_country
+    )
+);
+
+-- с COUNT и GROUP 
+EXPLAIN ANALYZE SELECT mg.name_group
+FROM music_group mg
+JOIN concert_group cg ON mg.id_group = cg.id_group
+JOIN city_the_tour ct ON cg.id_city_the_tour = ct.id_city_the_tour
+JOIN city c ON ct.id_city = c.id_city
+GROUP BY mg.id_group, mg.name_group
+HAVING COUNT(DISTINCT c.id_country) = (SELECT COUNT(*) FROM country);
+
+-- 3 вариант
+EXPLAIN ANALYZE SELECT mg.name_group
+FROM music_group mg
+LEFT JOIN concert_group cg ON mg.id_group = cg.id_group
+LEFT JOIN city_the_tour ct ON cg.id_city_the_tour = ct.id_city_the_tour
+LEFT JOIN city c ON ct.id_city = c.id_city
+GROUP BY mg.id_group, mg.name_group
+HAVING COUNT(DISTINCT c.id_country) = (SELECT COUNT(*) FROM country);
+
+
+
+--49. Выбрать название группы, которая посетила все города 
+--хотя бы одной страны. 
+ANALYZE 
+
+-- с подзапросом 
+EXPLAIN ANALYZE   SELECT name_group
+   FROM music_group
+   WHERE id_group IN (
+       SELECT id_group
+       FROM (
+           SELECT mg.id_group, COUNT(DISTINCT ct.id_city) AS city_count
+           FROM music_group mg
+           JOIN group_tour gt ON mg.id_group = gt.id_group
+           JOIN city_the_tour ct ON gt.id_group_tour = ct.id_city_the_tour
+           GROUP BY mg.id_group
+       ) AS subquery
+       WHERE city_count = (SELECT COUNT(*) FROM city WHERE id_country = (SELECT id_country FROM country LIMIT 1))
+   );
+   
+
+-- с СТЕ 
+    EXPLAIN ANALYZE  WITH CityCounts AS (
+       SELECT mg.id_group, COUNT(DISTINCT ct.id_city) AS city_count
+       FROM music_group mg
+       JOIN group_tour gt ON mg.id_group = gt.id_group
+       JOIN city_the_tour ct ON gt.id_group_tour = ct.id_city_the_tour
+       GROUP BY mg.id_group
+   )
+   SELECT mg.name_group
+   FROM music_group mg
+   JOIN CityCounts cc ON mg.id_group = cc.id_group
+   WHERE cc.city_count = (SELECT COUNT(*) FROM city WHERE id_country = (SELECT id_country FROM country LIMIT 1));
+   
+
+
+--50. Выбрать в одном столбце названия групп и фамилии, 
+--имена, отчества участников. 
+ANALYZE 
+
+-- простой 
+EXPLAIN ANALYZE SELECT CONCAT(mg.name_group,' ', m.surname, ' ', m.first_name, ' ', m.second_name ) AS имя 
+FROM music_group mg
+JOIN musician_groups mg2 ON mg.id_group = mg2.id_group
+JOIN musician m ON mg2.id_musician = m.id_musician;
+
+-- СТЕ 
+EXPLAIN ANALYZE WITH GroupMusicians AS (
+    SELECT CONCAT(mg.name_group,' ', m.surname, ' ', m.first_name, ' ', m.second_name ) AS имя 
+    FROM music_group mg
+    JOIN musician_groups mg2 ON mg.id_group = mg2.id_group
+	JOIN musician m ON mg2.id_musician = m.id_musician
+)
+SELECT *
+FROM GroupMusicians;
+
+--51. Выбрать для каждой группы названия тех стран, в кото
+--рых группа не давала концертов. 
+ANALYZE 
+
+-- с NOT IN 
+   EXPLAIN ANALYZE SELECT mg.name_group, c.name_country
+   FROM music_group mg
+   CROSS JOIN country c
+   WHERE c.id_country NOT IN (
+       SELECT DISTINCT co.id_country
+       FROM country co
+       JOIN city ci ON co.id_country = ci.id_country
+       JOIN concert_group cg ON ci.id_city = cg.id_city_the_tour
+       WHERE mg.id_group = cg.id_group
+   );
+   
+--с IS NULL 
+   EXPLAIN ANALYZE SELECT mg.name_group, c.name_country
+   FROM music_group mg
+   CROSS JOIN country c
+   LEFT JOIN (
+       SELECT DISTINCT mg.id_group, ci.id_country
+       FROM music_group mg
+       JOIN group_tour gt ON mg.id_group = gt.id_group
+       JOIN city_the_tour ct ON gt.id_group_tour = ct.id_city_the_tour
+       JOIN city ci ON ct.id_city = ci.id_city
+   ) AS subquery ON mg.id_group = subquery.id_group AND c.id_country = subquery.id_country
+   WHERE subquery.id_group IS NULL;
+ 
+ --NOT EXISTS
+   EXPLAIN ANALYZE SELECT mg.name_group, c.name_country
+   FROM music_group mg
+   CROSS JOIN country c
+   WHERE NOT EXISTS (
+       SELECT 1
+       FROM group_tour gt
+       JOIN city_the_tour ct ON gt.id_group_tour = ct.id_city_the_tour
+       JOIN city ci ON ct.id_city = ci.id_city
+       WHERE mg.id_group = gt.id_group AND ci.id_country = c.id_country
+   );
+   
+
+--52. Выбрать для каждой группы названия тех стран, в кото
+--рых группа была как минимум два раза. 
+ANALYZE 
+
+--Используя GROUP BY и HAVING
+EXPLAIN ANALYZE SELECT mg.name_group, c.name_country
+FROM music_group mg
+JOIN group_tour gt ON mg.id_group = gt.id_group
+JOIN concert_group cg ON gt.id_group_tour = cg.id_group_tour
+JOIN city_the_tour ct ON cg.id_city_the_tour = ct.id_city_the_tour
+JOIN city ci ON ct.id_city = ci.id_city
+JOIN country c ON ci.id_country = c.id_country
+GROUP BY mg.name_group, c.name_country
+HAVING COUNT(c.name_country) >= 2;
+
+--Используя оконные функции
+EXPLAIN ANALYZE WITH country_counts AS (
+    SELECT mg.name_group, c.name_country, COUNT(*) OVER (PARTITION BY mg.name_group, c.name_country) AS country_count
+    FROM music_group mg
+    JOIN group_tour gt ON mg.id_group = gt.id_group
+    JOIN concert_group cg ON gt.id_group_tour = cg.id_group_tour
+    JOIN city_the_tour ct ON cg.id_city_the_tour = ct.id_city_the_tour
+    JOIN city ci ON ct.id_city = ci.id_city
+    JOIN country c ON ci.id_country = c.id_country
+)
+SELECT DISTINCT(name_group), name_country
+FROM country_counts
+WHERE country_count >= 2;
+
+
+--53. Построить любую геометрическую прогрессию. 
+ANALYZE 
+
+--Используя рекурсивный CTE
+EXPLAIN ANALYZE WITH RECURSIVE geometric_progression AS (
+    SELECT 1 AS value
+    UNION ALL
+    SELECT value * 2
+    FROM geometric_progression
+    WHERE value * 2 <= 100
+)
+SELECT *
+FROM geometric_progression;
+
+
+--Используя JOIN и подзапрос
+EXPLAIN ANALYZE SELECT a.n * b.n AS value
+FROM (
+    SELECT 1 AS n
+    UNION ALL
+    SELECT 2
+    UNION ALL
+    SELECT 4
+) a
+JOIN (
+    SELECT 1 AS n
+    UNION ALL
+    SELECT 2
+    UNION ALL
+    SELECT 4
+) b ON a.n * b.n <= 100;
+
+
+--Используя функцию POW()
+EXPLAIN ANALYZE SELECT POW(2, n) AS value
+FROM generate_series(0, 6) AS n
+WHERE POW(2, n) <= 100;
+
+
+--54. Выбрать все годы текущего и прошлого века, заканчи
+--вающиеся на 0. 
+ANALYZE 
+
+--Используя функцию EXTRACT
+EXPLAIN ANALYZE SELECT DISTINCT EXTRACT(YEAR FROM date_of_creation) AS year_ending_in_0
+FROM music_group
+WHERE EXTRACT(YEAR FROM date_of_creation) % 10 = 0
+AND EXTRACT(YEAR FROM date_of_creation) >= EXTRACT(YEAR FROM CURRENT_DATE) - 100;
+
+-- оконные 
+EXPLAIN ANALYZE SELECT DISTINCT EXTRACT(YEAR FROM date_of_creation) AS year
+FROM music_group
+WHERE EXTRACT(YEAR FROM date_of_creation) BETWEEN EXTRACT(YEAR FROM CURRENT_DATE) - 100 AND EXTRACT(YEAR FROM CURRENT_DATE)
+AND MOD(EXTRACT(YEAR FROM date_of_creation), 10) = 0;
+
+-- СТЕ 
+EXPLAIN ANALYZE WITH YearExtract AS (
+    SELECT EXTRACT(YEAR FROM date_of_creation) AS year
+    FROM music_group
+)
+SELECT DISTINCT year
+FROM YearExtract
+WHERE year BETWEEN EXTRACT(YEAR FROM CURRENT_DATE) - 100 AND EXTRACT(YEAR FROM CURRENT_DATE)
+AND MOD(year, 10) = 0;
+
+
+
