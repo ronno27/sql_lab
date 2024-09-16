@@ -1,4 +1,3 @@
-![изображение](https://github.com/user-attachments/assets/c0474c0b-5a1d-41b0-af4a-abe52c714122)# sql_lab
 лабораторная работа по предмету "Сложные аспекты языка sql"
 ## Условие 
 1) Необходимо создать базу данных
@@ -7,4 +6,4 @@
 
 ## Реализация 
 Структура созданной базы данных 
-
+![изображение](https://github.com/user-attachments/assets/c0474c0b-5a1d-41b0-af4a-abe52c714122)# sql_lab
